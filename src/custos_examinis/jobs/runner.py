@@ -1,4 +1,6 @@
-from custos_examinis.domain.state import initial_state
+from typing import Any, cast
+
+from custos_examinis.domain.state import AuditState, initial_state
 from custos_examinis.graph.build import build_audit_graph
 from custos_examinis.ingest.models import FileSet
 from custos_examinis.jobs.store import JobStore
@@ -18,13 +20,22 @@ async def run_audit(
 
     try:
         graph = build_audit_graph(router)
-        result = await graph.ainvoke(initial_state(audit_id, file_set))
+        final_state: AuditState | None = None
+        async for event in graph.astream(
+            initial_state(audit_id, file_set), stream_mode=["updates", "values"]
+        ):
+            mode, chunk = cast(tuple[str, Any], event)
+            if mode == "updates":
+                for node_name in chunk:
+                    await store.append_progress(audit_id, node_name)
+            else:
+                final_state = cast(AuditState, chunk)
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller via job status
         logger.error("audit_run_failed", audit_id=audit_id, error=str(exc))
         await store.mark_failed(audit_id, str(exc))
         return
 
-    report = result.get("report")
+    report = final_state.get("report") if final_state else None
     if report is None:
         await store.mark_failed(audit_id, "graph completed without producing a report")
         return

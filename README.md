@@ -36,6 +36,13 @@ design constraint rather than an afterthought.
   cheapest model for a real-secret-vs-placeholder classification.
 - **Cost accounting.** Every LLM call's token usage is captured and rolled
   into an estimated dollar cost per audit, per provider.
+- **Live progress over SSE.** `GET /audits/{id}/events` streams a `progress`
+  event as each graph node finishes (`vulnerability_agent`, `code_quality_agent`,
+  `secrets_agent`, `aggregate`, `guardrail`), then a final `status` event once
+  the audit completes or fails. A client that connects after some nodes have
+  already finished still sees them, replayed from the job's stored state, so
+  it doesn't matter whether the SSE connection was opened before or after the
+  background task started.
 
 ## Project structure
 
@@ -53,7 +60,8 @@ src/custos_examinis/
   graph/                 build_audit_graph(): wires the agents into a StateGraph
   llm/                    ModelRouter, per-provider client factories, a sandboxed
                            file-read tool (built, not yet bound to any agent)
-  jobs/                   Redis-backed job store and the background audit runner
+  jobs/                   Redis-backed job store, the background audit runner,
+                           and the SSE progress stream
   costs/                  token usage tracking and a static per-model price table
 tests/
   unit/                  one test module per component, no network calls
@@ -156,7 +164,6 @@ it's worth turning on, see "what's next" below.
 - Multi-tenant auth and RBAC.
 - Vector-store-grounded rules via retrieval instead of relying purely on
   model knowledge for vulnerability patterns.
-- Server-sent events streaming of per-agent progress.
 - A small cost dashboard over the token usage already being tracked.
 - An LLM-based secondary "critic" pass on top of the deterministic guardrail,
   only once it has real evals behind it, not as a hand-wave.

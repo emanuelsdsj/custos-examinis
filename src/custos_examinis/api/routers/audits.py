@@ -2,14 +2,22 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
+from redis.asyncio import Redis
 
-from custos_examinis.api.deps import enforce_audit_rate_limit, get_job_store, get_model_router
+from custos_examinis.api.deps import (
+    enforce_audit_rate_limit,
+    get_job_store,
+    get_model_router,
+    get_redis,
+)
 from custos_examinis.api.schemas import AuditStatusResponse, AuditSubmitResponse, InlineFilesRequest
 from custos_examinis.auth.jwt import CurrentUser, get_current_user
 from custos_examinis.config import Settings, get_settings
 from custos_examinis.ingest.models import FileSet
 from custos_examinis.ingest.sandbox import IngestionError
 from custos_examinis.ingest.sources import from_inline_files, from_zip_bytes
+from custos_examinis.jobs.events import stream_audit_events
 from custos_examinis.jobs.runner import run_audit
 from custos_examinis.jobs.store import JobStore
 from custos_examinis.llm.router import ModelRouter
@@ -84,5 +92,35 @@ async def get_audit(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="audit not found")
 
     return AuditStatusResponse(
-        audit_id=job.audit_id, status=job.status, report=job.report, error=job.error
+        audit_id=job.audit_id,
+        status=job.status,
+        progress=job.progress,
+        report=job.report,
+        error=job.error,
+    )
+
+
+@router.get("/{audit_id}/events")
+async def stream_audit(
+    audit_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    store: Annotated[JobStore, Depends(get_job_store)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> StreamingResponse:
+    """Server-Sent Events stream of per-agent progress for one audit.
+
+    Each completed graph node (`vulnerability_agent`, `code_quality_agent`,
+    `secrets_agent`, `aggregate`, `guardrail`) is pushed as a `progress`
+    event as it finishes, followed by a final `status` event once the audit
+    completes or fails. A late-connecting client still sees every step that
+    already happened, replayed from the job's stored state.
+    """
+    job = await store.get(audit_id)
+    if job is None or job.owner != user.subject:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="audit not found")
+
+    return StreamingResponse(
+        stream_audit_events(audit_id, store, redis),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

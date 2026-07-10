@@ -16,5 +16,6 @@ class AuditSubmitResponse(BaseModel):
 class AuditStatusResponse(BaseModel):
     audit_id: str
     status: JobStatus
+    progress: list[str] = Field(default_factory=list)
     report: AuditReport | None = None
     error: str | None = None

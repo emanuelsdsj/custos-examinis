@@ -45,6 +45,36 @@ async def test_get_audit_returns_404_for_unknown_id(client: AsyncClient) -> None
     assert response.status_code == 404
 
 
+async def test_stream_audit_events_reports_progress_then_completion(
+    client: AsyncClient,
+) -> None:
+    submit_response = await client.post(
+        "/audits/inline", json={"files": {"app.py": "print('hello')\n"}}
+    )
+    audit_id = submit_response.json()["audit_id"]
+
+    async with client.stream("GET", f"/audits/{audit_id}/events") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+
+        body = ""
+        async for chunk in response.aiter_text():
+            body += chunk
+            if "event: status" in body:
+                break
+
+    assert "event: progress" in body
+    assert '"node": "guardrail"' in body
+    assert "event: status" in body
+    assert '"status": "completed"' in body
+
+
+async def test_stream_audit_events_returns_404_for_unknown_id(client: AsyncClient) -> None:
+    response = await client.get("/audits/does-not-exist/events")
+
+    assert response.status_code == 404
+
+
 async def test_get_audit_requires_authentication(client: AsyncClient) -> None:
     from custos_examinis.auth.jwt import get_current_user
     from custos_examinis.main import app
