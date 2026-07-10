@@ -95,4 +95,4 @@ async def test_append_progress_publishes_on_the_job_channel(
     assert json.loads(message["data"]) == {"type": "progress", "node": "guardrail"}
 
     await pubsub.unsubscribe(store.channel("audit-1"))
-    await pubsub.aclose()
+    await pubsub.aclose()  # type: ignore[no-untyped-call]
